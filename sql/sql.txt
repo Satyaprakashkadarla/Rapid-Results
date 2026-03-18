@@ -1,0 +1,779 @@
+-- ================================================================
+-- FINAL COMPLETE SETUP - Run this in Snowflake Worksheet
+-- ================================================================
+
+USE ROLE ACCOUNTADMIN;
+CREATE DATABASE IF NOT EXISTS CHARGEEASE_DB;
+USE DATABASE CHARGEEASE_DB;
+CREATE SCHEMA IF NOT EXISTS RAW;
+CREATE SCHEMA IF NOT EXISTS VALIDATED;
+CREATE SCHEMA IF NOT EXISTS CURATED;
+CREATE SCHEMA IF NOT EXISTS AUDIT;
+CREATE WAREHOUSE IF NOT EXISTS CHARGEEASE_WH
+    WAREHOUSE_SIZE = 'X-SMALL'
+    AUTO_SUSPEND   = 60
+    AUTO_RESUME    = TRUE;
+USE WAREHOUSE CHARGEEASE_WH;
+
+-- ----------------------------------------------------------------
+-- RAW TABLES
+-- ----------------------------------------------------------------
+USE SCHEMA RAW;
+
+CREATE OR REPLACE TABLE RAW.EV_STATIONS (
+    station_id      INT,
+    station_name    STRING,
+    latitude        FLOAT,
+    longitude       FLOAT,
+    city            STRING,
+    zone            STRING,
+    capacity_kw     INT,
+    operator        STRING,
+    status          STRING,
+    install_date    DATE,
+    _source_file    STRING,
+    _load_ts        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE RAW.CHARGERS (
+    charger_id            INT,
+    station_id            INT,
+    charger_type          STRING,
+    max_kw                INT,
+    status                STRING,
+    firmware_version      STRING,
+    last_maintenance_date DATE,
+    error_code            STRING,
+    _source_file          STRING,
+    _load_ts              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE RAW.SESSIONS (
+    session_id         INT,
+    user_id            INT,
+    vehicle_id         INT,
+    charger_id         INT,
+    start_time         TIMESTAMP_NTZ,
+    end_time           TIMESTAMP_NTZ,
+    energy_kwh         FLOAT,
+    duration_sec       INT,
+    tariff_type        STRING,
+    price              FLOAT,
+    start_soc          INT,
+    end_soc            INT,
+    grid_meter_reading FLOAT,
+    payment_channel    STRING,
+    is_flagged         INT,
+    _source_file       STRING,
+    _load_ts           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE RAW.USERS (
+    user_id           INT,
+    name              STRING,
+    dob               DATE,
+    gender            STRING,
+    phone             STRING,
+    email             STRING,
+    city              STRING,
+    state             STRING,
+    registration_date DATE,
+    kyc_status        STRING,
+    is_fleet_user     INT,
+    corporate_id      STRING,
+    _source_file      STRING,
+    _load_ts          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE RAW.VEHICLES (
+    vehicle_id           INT,
+    user_id              INT,
+    model                STRING,
+    battery_capacity_kwh INT,
+    vin                  STRING,
+    registration_number  STRING,
+    _source_file         STRING,
+    _load_ts             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------
+-- FILE FORMAT + STAGE
+-- ----------------------------------------------------------------
+CREATE OR REPLACE FILE FORMAT RAW.FF_CSV
+    TYPE                         = 'CSV'
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    SKIP_HEADER                  = 1
+    NULL_IF                      = ('NULL','null','')
+    EMPTY_FIELD_AS_NULL          = TRUE
+    DATE_FORMAT                  = 'YYYY-MM-DD'
+    TIMESTAMP_FORMAT             = 'YYYY-MM-DD';
+
+CREATE OR REPLACE STAGE RAW.EV_S3_STAGE
+    URL         = 's3://chargeease-ev-data-2024-984543547413-us-east-1-an/'
+    CREDENTIALS = (
+        AWS_KEY_ID     = 'YOUR-KEY'
+        AWS_SECRET_KEY = 'YOUR-KEY'
+    )
+    FILE_FORMAT = RAW.FF_CSV;
+
+-- ----------------------------------------------------------------
+-- COPY INTO RAW TABLES
+-- ----------------------------------------------------------------
+COPY INTO RAW.EV_STATIONS
+    (station_id,station_name,latitude,longitude,city,zone,capacity_kw,operator,status,install_date,_source_file)
+FROM (SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,METADATA$FILENAME FROM @RAW.EV_S3_STAGE)
+PATTERN = '.*stations/.*[.]csv' ON_ERROR = 'CONTINUE';
+
+COPY INTO RAW.CHARGERS
+    (charger_id,station_id,charger_type,max_kw,status,firmware_version,last_maintenance_date,error_code,_source_file)
+FROM (SELECT $1,$2,$3,$4,$5,$6,$7,$8,METADATA$FILENAME FROM @RAW.EV_S3_STAGE)
+PATTERN = '.*chargers/.*[.]csv' ON_ERROR = 'CONTINUE';
+
+COPY INTO RAW.SESSIONS
+    (session_id,user_id,vehicle_id,charger_id,start_time,end_time,energy_kwh,duration_sec,tariff_type,price,start_soc,end_soc,grid_meter_reading,payment_channel,is_flagged,_source_file)
+FROM (SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,METADATA$FILENAME FROM @RAW.EV_S3_STAGE)
+PATTERN = '.*sessions/.*[.]csv' ON_ERROR = 'CONTINUE';
+
+COPY INTO RAW.USERS
+    (user_id,name,dob,gender,phone,email,city,state,registration_date,kyc_status,is_fleet_user,corporate_id,_source_file)
+FROM (SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,METADATA$FILENAME FROM @RAW.EV_S3_STAGE)
+PATTERN = '.*users/.*[.]csv' ON_ERROR = 'CONTINUE';
+
+COPY INTO RAW.VEHICLES
+    (vehicle_id,user_id,model,battery_capacity_kwh,vin,registration_number,_source_file)
+FROM (SELECT $1,$2,$3,$4,$5,$6,METADATA$FILENAME FROM @RAW.EV_S3_STAGE)
+PATTERN = '.*vehicles/.*[.]csv' ON_ERROR = 'CONTINUE';
+
+-- Verify counts
+SELECT 'EV_STATIONS' AS tbl, COUNT(*) AS row_count FROM RAW.EV_STATIONS
+UNION ALL SELECT 'CHARGERS',   COUNT(*) FROM RAW.CHARGERS
+UNION ALL SELECT 'SESSIONS',   COUNT(*) FROM RAW.SESSIONS
+UNION ALL SELECT 'USERS',      COUNT(*) FROM RAW.USERS
+UNION ALL SELECT 'VEHICLES',   COUNT(*) FROM RAW.VEHICLES;
+
+-- ----------------------------------------------------------------
+-- VALIDATED TABLES
+-- ----------------------------------------------------------------
+USE SCHEMA VALIDATED;
+CREATE OR REPLACE TABLE VALIDATED.EV_STATIONS LIKE RAW.EV_STATIONS;
+CREATE OR REPLACE TABLE VALIDATED.CHARGERS    LIKE RAW.CHARGERS;
+CREATE OR REPLACE TABLE VALIDATED.SESSIONS    LIKE RAW.SESSIONS;
+CREATE OR REPLACE TABLE VALIDATED.USERS       LIKE RAW.USERS;
+CREATE OR REPLACE TABLE VALIDATED.VEHICLES    LIKE RAW.VEHICLES;
+
+-- ----------------------------------------------------------------
+-- AUDIT TABLES
+-- ----------------------------------------------------------------
+USE SCHEMA AUDIT;
+
+CREATE OR REPLACE TABLE AUDIT.DQ_VIOLATIONS (
+    violation_id   INT AUTOINCREMENT PRIMARY KEY,
+    table_name     STRING,
+    record_id      INT,
+    violation_type STRING,
+    detail         STRING,
+    logged_at      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE AUDIT.FRAUD_ALERTS (
+    alert_id   INT AUTOINCREMENT PRIMARY KEY,
+    session_id INT,
+    user_id    INT,
+    charger_id INT,
+    fraud_rule STRING,
+    detail     STRING,
+    alerted_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE AUDIT.BATCH_LOAD_LOG (
+    log_id      INT AUTOINCREMENT PRIMARY KEY,
+    source_file STRING,
+    table_name  STRING,
+    rows_loaded INT,
+    loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE AUDIT.RULE_HIT_LOG (
+    log_id    INT AUTOINCREMENT PRIMARY KEY,
+    rule_name STRING,
+    hit_count INT,
+    run_date  DATE DEFAULT CURRENT_DATE()
+);
+
+CREATE OR REPLACE TABLE AUDIT.UPTIME_CHANGE_LOG (
+    log_id     INT AUTOINCREMENT PRIMARY KEY,
+    charger_id INT,
+    old_status STRING,
+    new_status STRING,
+    changed_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE OR REPLACE TABLE AUDIT.DATA_LINEAGE (
+    lineage_id    INT AUTOINCREMENT PRIMARY KEY,
+    source_table  STRING,
+    target_table  STRING,
+    operation     STRING,
+    rows_affected INT,
+    run_at        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------
+-- CURATED TABLES (eff_end_date fixed - no default value)
+-- ----------------------------------------------------------------
+USE SCHEMA CURATED;
+
+CREATE OR REPLACE TABLE CURATED.DIM_STATIONS (
+    station_sk     INT AUTOINCREMENT PRIMARY KEY,
+    station_id     INT,
+    station_name   STRING,
+    latitude       FLOAT,
+    longitude      FLOAT,
+    city           STRING,
+    zone           STRING,
+    capacity_kw    INT,
+    operator       STRING,
+    status         STRING,
+    install_date   DATE,
+    eff_start_date DATE,
+    eff_end_date   DATE,
+    is_current     BOOLEAN
+);
+
+CREATE OR REPLACE TABLE CURATED.DIM_CHARGERS (
+    charger_sk            INT AUTOINCREMENT PRIMARY KEY,
+    charger_id            INT,
+    station_id            INT,
+    charger_type          STRING,
+    max_kw                INT,
+    status                STRING,
+    firmware_version      STRING,
+    last_maintenance_date DATE,
+    error_code            STRING,
+    eff_start_date        DATE,
+    eff_end_date          DATE,
+    is_current            BOOLEAN
+);
+
+CREATE OR REPLACE TABLE CURATED.DIM_TARIFFS (
+    tariff_sk      INT AUTOINCREMENT PRIMARY KEY,
+    tariff_type    STRING,
+    description    STRING,
+    rate_per_kwh   FLOAT,
+    eff_start_date DATE,
+    eff_end_date   DATE,
+    is_current     BOOLEAN
+);
+
+CREATE OR REPLACE TABLE CURATED.DIM_USERS (
+    user_sk           INT AUTOINCREMENT PRIMARY KEY,
+    user_id           INT,
+    name              STRING,
+    dob               DATE,
+    gender            STRING,
+    phone             STRING,
+    email             STRING,
+    city              STRING,
+    state             STRING,
+    registration_date DATE,
+    kyc_status        STRING,
+    is_fleet_user     INT,
+    corporate_id      STRING
+);
+
+CREATE OR REPLACE TABLE CURATED.DIM_VEHICLES (
+    vehicle_sk           INT AUTOINCREMENT PRIMARY KEY,
+    vehicle_id           INT,
+    user_id              INT,
+    model                STRING,
+    battery_capacity_kwh INT,
+    vin                  STRING,
+    registration_number  STRING
+);
+
+CREATE OR REPLACE TABLE CURATED.FACT_SESSIONS (
+    session_sk         INT AUTOINCREMENT PRIMARY KEY,
+    session_id         INT,
+    user_id            INT,
+    vehicle_id         INT,
+    charger_id         INT,
+    station_id         INT,
+    tariff_sk          INT,
+    start_time         TIMESTAMP_NTZ,
+    end_time           TIMESTAMP_NTZ,
+    energy_kwh         FLOAT,
+    duration_sec       INT,
+    tariff_type        STRING,
+    price              FLOAT,
+    start_soc          INT,
+    end_soc            INT,
+    soc_delta          INT,
+    idle_time_sec      INT,
+    grid_meter_reading FLOAT,
+    payment_channel    STRING,
+    is_flagged         INT,
+    fraud_reason       STRING
+);
+
+-- Seed tariffs
+INSERT INTO CURATED.DIM_TARIFFS (tariff_type,description,rate_per_kwh,eff_start_date,eff_end_date,is_current)
+VALUES
+    ('Flat',          'Fixed rate',              5.50, CURRENT_DATE(), '9999-12-31', TRUE),
+    ('TimeOfUse',     'Variable rate by time',   7.20, CURRENT_DATE(), '9999-12-31', TRUE),
+    ('Peak',          'High demand peak hours',  9.00, CURRENT_DATE(), '9999-12-31', TRUE),
+    ('CorporateFleet','Corporate bulk rate',     4.00, CURRENT_DATE(), '9999-12-31', TRUE);
+
+-- ----------------------------------------------------------------
+-- VALIDATION PROCEDURE
+-- ----------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE VALIDATED.SP_VALIDATE_ALL()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    INSERT INTO VALIDATED.EV_STATIONS
+    SELECT
+        station_id, TRIM(station_name),
+        ROUND(latitude,6), ROUND(longitude,6),
+        TRIM(city), UPPER(TRIM(zone)),
+        capacity_kw, TRIM(operator), status, install_date,
+        _source_file, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+    FROM RAW.EV_STATIONS
+    WHERE capacity_kw > 0
+      AND latitude IS NOT NULL
+      AND status IN ('Active','Inactive','Maintenance')
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY station_id ORDER BY _load_ts DESC) = 1;
+
+    INSERT INTO VALIDATED.CHARGERS
+    SELECT
+        charger_id, station_id, UPPER(charger_type),
+        max_kw, status, firmware_version,
+        last_maintenance_date, error_code,
+        _source_file, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+    FROM RAW.CHARGERS
+    WHERE max_kw > 0
+      AND charger_type IN ('AC','DC')
+      AND status IN ('Available','Busy','Offline','Fault')
+      AND station_id IN (SELECT station_id FROM VALIDATED.EV_STATIONS)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY charger_id ORDER BY _load_ts DESC) = 1;
+
+    INSERT INTO VALIDATED.USERS
+    SELECT
+        user_id, TRIM(name), dob, gender,
+        TRIM(phone), LOWER(TRIM(email)),
+        TRIM(city), UPPER(TRIM(state)),
+        registration_date, kyc_status,
+        is_fleet_user, corporate_id,
+        _source_file, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+    FROM RAW.USERS
+    WHERE kyc_status IN ('Verified','Pending','Rejected')
+      AND email LIKE '%@%.%'
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY _load_ts DESC) = 1;
+
+    INSERT INTO VALIDATED.SESSIONS
+    SELECT
+        session_id, user_id, vehicle_id, charger_id,
+        start_time::TIMESTAMP_NTZ,
+        end_time::TIMESTAMP_NTZ,
+        energy_kwh, duration_sec, tariff_type, price,
+        start_soc, end_soc, grid_meter_reading,
+        payment_channel, is_flagged,
+        _source_file, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+    FROM RAW.SESSIONS
+    WHERE energy_kwh  >= 0
+      AND duration_sec >= 0
+      AND start_soc BETWEEN 0 AND 100
+      AND end_soc   BETWEEN 0 AND 100
+      AND end_time  >= start_time
+      AND charger_id IN (SELECT charger_id FROM VALIDATED.CHARGERS)
+      AND user_id    IN (SELECT user_id    FROM VALIDATED.USERS)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY _load_ts DESC) = 1;
+
+    INSERT INTO VALIDATED.VEHICLES
+    SELECT
+        vehicle_id, user_id, model,
+        battery_capacity_kwh, vin, registration_number,
+        _source_file, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+    FROM RAW.VEHICLES
+    WHERE battery_capacity_kwh > 0
+      AND user_id IN (SELECT user_id FROM VALIDATED.USERS)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY _load_ts DESC) = 1;
+
+    INSERT INTO AUDIT.BATCH_LOAD_LOG(source_file,table_name,rows_loaded)
+    SELECT _source_file,'EV_STATIONS',COUNT(*) FROM RAW.EV_STATIONS GROUP BY _source_file;
+    INSERT INTO AUDIT.BATCH_LOAD_LOG(source_file,table_name,rows_loaded)
+    SELECT _source_file,'CHARGERS',COUNT(*) FROM RAW.CHARGERS GROUP BY _source_file;
+    INSERT INTO AUDIT.BATCH_LOAD_LOG(source_file,table_name,rows_loaded)
+    SELECT _source_file,'SESSIONS',COUNT(*) FROM RAW.SESSIONS GROUP BY _source_file;
+    INSERT INTO AUDIT.BATCH_LOAD_LOG(source_file,table_name,rows_loaded)
+    SELECT _source_file,'USERS',COUNT(*) FROM RAW.USERS GROUP BY _source_file;
+    INSERT INTO AUDIT.BATCH_LOAD_LOG(source_file,table_name,rows_loaded)
+    SELECT _source_file,'VEHICLES',COUNT(*) FROM RAW.VEHICLES GROUP BY _source_file;
+
+    RETURN 'Validation complete!';
+END;
+$$;
+
+-- ----------------------------------------------------------------
+-- MERGE PROCEDURES
+-- ----------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_STATIONS()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    UPDATE CURATED.DIM_STATIONS tgt
+    SET eff_end_date = CURRENT_DATE()-1, is_current = FALSE
+    WHERE is_current = TRUE
+      AND EXISTS (
+          SELECT 1 FROM VALIDATED.EV_STATIONS src
+          WHERE src.station_id = tgt.station_id
+            AND (src.status != tgt.status OR src.capacity_kw != tgt.capacity_kw)
+      );
+
+    INSERT INTO CURATED.DIM_STATIONS
+        (station_id,station_name,latitude,longitude,city,zone,
+         capacity_kw,operator,status,install_date,
+         eff_start_date,eff_end_date,is_current)
+    SELECT station_id,station_name,latitude,longitude,city,zone,
+           capacity_kw,operator,status,install_date,
+           CURRENT_DATE(),'9999-12-31',TRUE
+    FROM VALIDATED.EV_STATIONS src
+    WHERE NOT EXISTS (
+        SELECT 1 FROM CURATED.DIM_STATIONS tgt
+        WHERE tgt.station_id = src.station_id AND tgt.is_current = TRUE
+    );
+    RETURN 'DIM_STATIONS SCD-2 merge done.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_CHARGERS()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    UPDATE CURATED.DIM_CHARGERS tgt
+    SET eff_end_date = CURRENT_DATE()-1, is_current = FALSE
+    WHERE is_current = TRUE
+      AND EXISTS (
+          SELECT 1 FROM VALIDATED.CHARGERS src
+          WHERE src.charger_id = tgt.charger_id
+            AND (src.status != tgt.status OR src.firmware_version != tgt.firmware_version)
+      );
+
+    INSERT INTO CURATED.DIM_CHARGERS
+        (charger_id,station_id,charger_type,max_kw,status,
+         firmware_version,last_maintenance_date,error_code,
+         eff_start_date,eff_end_date,is_current)
+    SELECT charger_id,station_id,charger_type,max_kw,status,
+           firmware_version,last_maintenance_date,error_code,
+           CURRENT_DATE(),'9999-12-31',TRUE
+    FROM VALIDATED.CHARGERS src
+    WHERE NOT EXISTS (
+        SELECT 1 FROM CURATED.DIM_CHARGERS tgt
+        WHERE tgt.charger_id = src.charger_id AND tgt.is_current = TRUE
+    );
+    RETURN 'DIM_CHARGERS SCD-2 merge done.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_TARIFFS()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    INSERT INTO CURATED.DIM_TARIFFS (tariff_type,description,rate_per_kwh,eff_start_date,eff_end_date,is_current)
+    SELECT DISTINCT tariff_type,'Auto-created',0.0,CURRENT_DATE(),'9999-12-31',TRUE
+    FROM VALIDATED.SESSIONS
+    WHERE tariff_type NOT IN (
+        SELECT tariff_type FROM CURATED.DIM_TARIFFS WHERE is_current = TRUE
+    );
+    RETURN 'DIM_TARIFFS SCD-2 merge done.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_USERS()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    MERGE INTO CURATED.DIM_USERS tgt
+    USING VALIDATED.USERS src ON tgt.user_id = src.user_id
+    WHEN MATCHED THEN UPDATE SET
+        name=src.name, dob=src.dob, gender=src.gender,
+        phone=src.phone, email=src.email, city=src.city,
+        state=src.state, kyc_status=src.kyc_status,
+        is_fleet_user=src.is_fleet_user, corporate_id=src.corporate_id
+    WHEN NOT MATCHED THEN INSERT
+        (user_id,name,dob,gender,phone,email,city,state,
+         registration_date,kyc_status,is_fleet_user,corporate_id)
+    VALUES
+        (src.user_id,src.name,src.dob,src.gender,src.phone,src.email,
+         src.city,src.state,src.registration_date,src.kyc_status,
+         src.is_fleet_user,src.corporate_id);
+    RETURN 'DIM_USERS merge done.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_VEHICLES()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    MERGE INTO CURATED.DIM_VEHICLES tgt
+    USING VALIDATED.VEHICLES src ON tgt.vehicle_id = src.vehicle_id
+    WHEN MATCHED THEN UPDATE SET
+        user_id=src.user_id, model=src.model,
+        battery_capacity_kwh=src.battery_capacity_kwh,
+        vin=src.vin, registration_number=src.registration_number
+    WHEN NOT MATCHED THEN INSERT
+        (vehicle_id,user_id,model,battery_capacity_kwh,vin,registration_number)
+    VALUES
+        (src.vehicle_id,src.user_id,src.model,src.battery_capacity_kwh,
+         src.vin,src.registration_number);
+    RETURN 'DIM_VEHICLES merge done.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CURATED.SP_MERGE_SESSIONS()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    MERGE INTO CURATED.FACT_SESSIONS tgt
+    USING (
+        SELECT
+            s.session_id, s.user_id, s.vehicle_id, s.charger_id,
+            c.station_id,
+            t.tariff_sk,
+            s.start_time, s.end_time,
+            s.energy_kwh, s.duration_sec,
+            s.tariff_type, s.price,
+            s.start_soc, s.end_soc,
+            (s.end_soc - s.start_soc) AS soc_delta,
+            (DATEDIFF('second',s.start_time,s.end_time) - s.duration_sec) AS idle_time_sec,
+            s.grid_meter_reading, s.payment_channel, s.is_flagged,
+            CASE
+                WHEN (s.end_soc-s.start_soc) > 30 AND s.duration_sec < 120
+                     THEN 'SOC jump >30pct in <2min'
+                WHEN s.energy_kwh > c.max_kw
+                     THEN 'Energy exceeds charger capacity'
+                WHEN s.is_flagged = 1 AND s.duration_sec < 60
+                     THEN 'Power reported during inactive session'
+                WHEN (DATEDIFF('second',s.start_time,s.end_time)-s.duration_sec) > 3600
+                     THEN 'Excessively long idle time'
+                ELSE NULL
+            END AS fraud_reason
+        FROM VALIDATED.SESSIONS s
+        LEFT JOIN VALIDATED.CHARGERS c  ON s.charger_id = c.charger_id
+        LEFT JOIN CURATED.DIM_TARIFFS t ON s.tariff_type = t.tariff_type AND t.is_current = TRUE
+    ) src ON tgt.session_id = src.session_id
+    WHEN NOT MATCHED THEN INSERT
+        (session_id,user_id,vehicle_id,charger_id,station_id,tariff_sk,
+         start_time,end_time,energy_kwh,duration_sec,tariff_type,price,
+         start_soc,end_soc,soc_delta,idle_time_sec,
+         grid_meter_reading,payment_channel,is_flagged,fraud_reason)
+    VALUES
+        (src.session_id,src.user_id,src.vehicle_id,src.charger_id,src.station_id,src.tariff_sk,
+         src.start_time,src.end_time,src.energy_kwh,src.duration_sec,src.tariff_type,src.price,
+         src.start_soc,src.end_soc,src.soc_delta,src.idle_time_sec,
+         src.grid_meter_reading,src.payment_channel,src.is_flagged,src.fraud_reason);
+    RETURN 'FACT_SESSIONS merge done.';
+END;
+$$;
+
+-- ----------------------------------------------------------------
+-- FRAUD DETECTION
+-- ----------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE AUDIT.SP_DETECT_FRAUD()
+RETURNS STRING LANGUAGE SQL AS
+$$
+BEGIN
+    INSERT INTO AUDIT.FRAUD_ALERTS(session_id,user_id,charger_id,fraud_rule,detail)
+    SELECT session_id,user_id,charger_id,'SOC_JUMP',
+           'SOC rose '||(end_soc-start_soc)::STRING||'pct in '||duration_sec::STRING||'s'
+    FROM CURATED.FACT_SESSIONS
+    WHERE (end_soc-start_soc) > 30 AND duration_sec < 120;
+
+    INSERT INTO AUDIT.FRAUD_ALERTS(session_id,user_id,charger_id,fraud_rule,detail)
+    SELECT f.session_id,f.user_id,f.charger_id,'ENERGY_OVERFLOW',
+           'Delivered '||f.energy_kwh::STRING||' kWh > max '||c.max_kw::STRING||' kW'
+    FROM CURATED.FACT_SESSIONS f
+    JOIN CURATED.DIM_CHARGERS c ON f.charger_id=c.charger_id AND c.is_current=TRUE
+    WHERE f.energy_kwh > c.max_kw;
+
+    INSERT INTO AUDIT.FRAUD_ALERTS(session_id,user_id,charger_id,fraud_rule,detail)
+    SELECT session_id,user_id,charger_id,'GHOST_SESSION',
+           'Flagged session lasted only '||duration_sec::STRING||' seconds'
+    FROM CURATED.FACT_SESSIONS
+    WHERE is_flagged=1 AND duration_sec < 60;
+
+    INSERT INTO AUDIT.FRAUD_ALERTS(session_id,user_id,charger_id,fraud_rule,detail)
+    SELECT a.session_id,a.user_id,a.charger_id,'PARALLEL_SESSION',
+           'Overlaps with session '||b.session_id::STRING
+    FROM CURATED.FACT_SESSIONS a
+    JOIN CURATED.FACT_SESSIONS b
+      ON a.user_id=b.user_id AND a.session_id!=b.session_id
+     AND a.start_time<=b.end_time AND a.end_time>=b.start_time;
+
+    INSERT INTO AUDIT.FRAUD_ALERTS(session_id,user_id,charger_id,fraud_rule,detail)
+    SELECT session_id,user_id,charger_id,'EXCESSIVE_IDLE',
+           'Idle '||(idle_time_sec/60)::STRING||' minutes after charging'
+    FROM CURATED.FACT_SESSIONS
+    WHERE idle_time_sec > 3600;
+
+    INSERT INTO AUDIT.RULE_HIT_LOG(rule_name,hit_count)
+    SELECT fraud_rule,COUNT(*) FROM AUDIT.FRAUD_ALERTS GROUP BY fraud_rule;
+
+    RETURN 'Fraud detection done. Check AUDIT.FRAUD_ALERTS.';
+END;
+$$;
+
+-- ----------------------------------------------------------------
+-- STREAMS + TASK
+-- ----------------------------------------------------------------
+CREATE OR REPLACE STREAM RAW.STREAM_NEW_SESSIONS   ON TABLE RAW.SESSIONS;
+CREATE OR REPLACE STREAM RAW.STREAM_CHARGER_HEALTH ON TABLE RAW.CHARGERS;
+
+CREATE OR REPLACE TASK CURATED.TASK_DAILY_PIPELINE
+    WAREHOUSE = CHARGEEASE_WH
+    SCHEDULE  = 'USING CRON 0 1 * * * UTC'
+AS
+BEGIN
+    CALL VALIDATED.SP_VALIDATE_ALL();
+    CALL CURATED.SP_MERGE_STATIONS();
+    CALL CURATED.SP_MERGE_CHARGERS();
+    CALL CURATED.SP_MERGE_TARIFFS();
+    CALL CURATED.SP_MERGE_USERS();
+    CALL CURATED.SP_MERGE_VEHICLES();
+    CALL CURATED.SP_MERGE_SESSIONS();
+    CALL AUDIT.SP_DETECT_FRAUD();
+END;
+
+ALTER TASK CURATED.TASK_DAILY_PIPELINE RESUME;
+
+-- ----------------------------------------------------------------
+-- MASKING POLICIES
+-- ----------------------------------------------------------------
+USE SCHEMA CURATED;
+
+CREATE OR REPLACE MASKING POLICY CURATED.MASK_EMAIL
+AS (val STRING) RETURNS STRING ->
+    CASE WHEN CURRENT_ROLE()='ACCOUNTADMIN' THEN val
+         ELSE REGEXP_REPLACE(val,'.+@','****@')
+    END;
+
+CREATE OR REPLACE MASKING POLICY CURATED.MASK_PHONE
+AS (val STRING) RETURNS STRING ->
+    CASE WHEN CURRENT_ROLE()='ACCOUNTADMIN' THEN val
+         ELSE 'XXXXXX'||RIGHT(val,4)
+    END;
+
+CREATE OR REPLACE MASKING POLICY CURATED.MASK_VIN
+AS (val STRING) RETURNS STRING ->
+    CASE WHEN CURRENT_ROLE()='ACCOUNTADMIN' THEN val
+         ELSE 'VIN-XXXX-'||RIGHT(val,4)
+    END;
+
+ALTER TABLE CURATED.DIM_USERS    MODIFY COLUMN email SET MASKING POLICY CURATED.MASK_EMAIL;
+ALTER TABLE CURATED.DIM_USERS    MODIFY COLUMN phone SET MASKING POLICY CURATED.MASK_PHONE;
+ALTER TABLE CURATED.DIM_VEHICLES MODIFY COLUMN vin   SET MASKING POLICY CURATED.MASK_VIN;
+
+-- ----------------------------------------------------------------
+-- KPI VIEWS
+-- ----------------------------------------------------------------
+CREATE OR REPLACE VIEW CURATED.VW_KPI1_ANOMALY_SCORE AS
+SELECT f.charger_id, s.city, s.zone,
+    COUNT(*) AS total_sessions,
+    SUM(f.is_flagged) AS flagged_sessions,
+    ROUND(SUM(f.is_flagged)*100.0/COUNT(*),2) AS anomaly_score_pct
+FROM CURATED.FACT_SESSIONS f
+JOIN CURATED.DIM_CHARGERS c ON f.charger_id=c.charger_id AND c.is_current=TRUE
+JOIN CURATED.DIM_STATIONS s ON c.station_id=s.station_id AND s.is_current=TRUE
+GROUP BY f.charger_id,s.city,s.zone;
+
+CREATE OR REPLACE VIEW CURATED.VW_KPI2_UPTIME_SCORE AS
+SELECT s.city, s.zone,
+    COUNT(*) AS total_chargers,
+    SUM(CASE WHEN c.status IN ('Available','Busy') THEN 1 ELSE 0 END) AS up_chargers,
+    ROUND(SUM(CASE WHEN c.status IN ('Available','Busy') THEN 1 ELSE 0 END)*100.0/COUNT(*),2) AS uptime_pct
+FROM CURATED.DIM_CHARGERS c
+JOIN CURATED.DIM_STATIONS s ON c.station_id=s.station_id AND s.is_current=TRUE
+WHERE c.is_current=TRUE
+GROUP BY s.city,s.zone;
+
+CREATE OR REPLACE VIEW CURATED.VW_KPI3_ACTIVE_USERS AS
+SELECT
+    (SELECT COUNT(*) FROM CURATED.DIM_USERS) AS total_registered,
+    COUNT(DISTINCT f.user_id) AS active_last_30days,
+    ROUND(COUNT(DISTINCT f.user_id)*100.0
+          /NULLIF((SELECT COUNT(*) FROM CURATED.DIM_USERS),0),2) AS active_ratio_pct
+FROM CURATED.FACT_SESSIONS f
+WHERE f.start_time >= DATEADD('day',-30,CURRENT_DATE());
+
+CREATE OR REPLACE VIEW CURATED.VW_KPI4_GRID_LOAD AS
+SELECT s.city, s.zone,
+    COUNT(DISTINCT s.station_id) AS total_stations,
+    SUM(CASE WHEN p.total_kwh < s.capacity_kw THEN 1 ELSE 0 END) AS balanced_stations,
+    ROUND(SUM(CASE WHEN p.total_kwh < s.capacity_kw THEN 1 ELSE 0 END)*100.0
+          /NULLIF(COUNT(DISTINCT s.station_id),0),2) AS grid_load_index
+FROM CURATED.DIM_STATIONS s
+JOIN (
+    SELECT c.station_id, SUM(f.energy_kwh) AS total_kwh
+    FROM CURATED.FACT_SESSIONS f
+    JOIN CURATED.DIM_CHARGERS c ON f.charger_id=c.charger_id
+    GROUP BY c.station_id
+) p ON s.station_id=p.station_id
+WHERE s.is_current=TRUE
+GROUP BY s.city,s.zone;
+
+CREATE OR REPLACE VIEW CURATED.VW_KPI5_ARPS AS
+SELECT tariff_type,
+    COUNT(*) AS total_sessions,
+    ROUND(SUM(price),2) AS total_revenue,
+    ROUND(AVG(price),2) AS avg_revenue_per_session
+FROM CURATED.FACT_SESSIONS
+GROUP BY tariff_type
+ORDER BY avg_revenue_per_session DESC;
+
+-- ----------------------------------------------------------------
+-- AUDIT VIEWS
+-- ----------------------------------------------------------------
+CREATE OR REPLACE VIEW AUDIT.VW_BATCH_SUMMARY AS
+SELECT table_name,source_file,rows_loaded,loaded_at
+FROM AUDIT.BATCH_LOAD_LOG ORDER BY loaded_at DESC;
+
+CREATE OR REPLACE VIEW AUDIT.VW_DQ_SUMMARY AS
+SELECT table_name,violation_type,COUNT(*) AS violation_count
+FROM AUDIT.DQ_VIOLATIONS GROUP BY table_name,violation_type;
+
+CREATE OR REPLACE VIEW AUDIT.VW_RULE_HIT_RATES AS
+SELECT rule_name,SUM(hit_count) AS total_hits
+FROM AUDIT.RULE_HIT_LOG GROUP BY rule_name;
+
+-- ----------------------------------------------------------------
+-- RUN FULL PIPELINE NOW
+-- ----------------------------------------------------------------
+CALL VALIDATED.SP_VALIDATE_ALL();
+CALL CURATED.SP_MERGE_STATIONS();
+CALL CURATED.SP_MERGE_CHARGERS();
+CALL CURATED.SP_MERGE_TARIFFS();
+CALL CURATED.SP_MERGE_USERS();
+CALL CURATED.SP_MERGE_VEHICLES();
+CALL CURATED.SP_MERGE_SESSIONS();
+CALL AUDIT.SP_DETECT_FRAUD();
+
+-- ----------------------------------------------------------------
+-- SHOW ALL KPI RESULTS
+-- ----------------------------------------------------------------
+SELECT 'KPI1-ANOMALY' AS kpi, charger_id::STRING AS key, anomaly_score_pct::STRING AS value
+FROM CURATED.VW_KPI1_ANOMALY_SCORE
+UNION ALL
+SELECT 'KPI2-UPTIME', city||'-'||zone, uptime_pct::STRING
+FROM CURATED.VW_KPI2_UPTIME_SCORE
+UNION ALL
+SELECT 'KPI3-ACTIVE', 'active_ratio', active_ratio_pct::STRING
+FROM CURATED.VW_KPI3_ACTIVE_USERS
+UNION ALL
+SELECT 'KPI4-GRID', city||'-'||zone, grid_load_index::STRING
+FROM CURATED.VW_KPI4_GRID_LOAD
+UNION ALL
+SELECT 'KPI5-ARPS', tariff_type, avg_revenue_per_session::STRING
+FROM CURATED.VW_KPI5_ARPS
+ORDER BY kpi;
+
+
