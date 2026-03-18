@@ -1,0 +1,16 @@
+
+# --- Snowflake Credentials ---
+SNOWFLAKE_ACCOUNT   = "ACCOUNT"
+SNOWFLAKE_USER      = "USER"
+SNOWFLAKE_PASSWORD  = "PASSWORD"
+SNOWFLAKE_WAREHOUSE = "WH"
+SNOWFLAKE_DATABASE  = "DB"
+SNOWFLAKE_SCHEMA    = "RAW"
+s
+# --- AWS Credentials ---
+AWS_ACCESS_KEY  = "YOUR-KEY"
+AWS_SECRET_KEY  = "YOUR-KEY"
+AWS_REGION      = "us-east-1"
+
+# --- S3 Bucket ---
+S3_BUCKET_NAME  = "chargeease-ev-data-2024-984543547413-us-east-1-an"
