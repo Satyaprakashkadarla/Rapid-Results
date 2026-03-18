@@ -1,0 +1,4 @@
+user_id,name,dob,gender,phone,email,city,state,registration_date,kyc_status,is_fleet_user,corporate_id
+7,User_7,2024-01-07,M,8000000007,user7@mail.com,Guntur,AP,2024-01-07,Verified,1,CORP007
+3,User_3,2024-01-03,M,8000000003,user3@mail.com,Vijayawada,AP,2024-01-03,Verified,1,CORP003
+6,User_6,2024-01-06,F,8000000006,user6@mail.com,Vijayawada,AP,2024-01-06,Pending,0,CORP006

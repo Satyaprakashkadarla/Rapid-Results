@@ -1,0 +1,4 @@
+charger_id,station_id,charger_type,max_kw,status,firmware_version,last_maintenance_date,error_code
+10,10,AC,12,Available,v10.0.8,2024-01-10,E002
+1,2,DC,128,Available,v1.0.6,2024-01-01,E002
+7,2,DC,133,Busy,v7.0.2,2024-01-07,E002

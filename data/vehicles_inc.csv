@@ -1,0 +1,4 @@
+vehicle_id,user_id,model,battery_capacity_kwh,vin,registration_number
+9,1,Tata Nexon EV,56,VIN00009,AP09AB0009
+6,9,Hyundai Kona,24,VIN00006,AP09AB0006
+4,2,Tata Nexon EV,23,VIN00004,AP09AB0004

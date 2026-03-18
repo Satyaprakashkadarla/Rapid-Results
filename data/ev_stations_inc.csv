@@ -1,0 +1,4 @@
+station_id,station_name,latitude,longitude,city,zone,capacity_kw,operator,status,install_date
+3,Station_3,17.00178951809313,74.54190392415066,Vijayawada,East,134,Tata Power,Inactive,2024-01-03
+2,Station_2,15.5342311116555,70.61564660385642,Guntur,South,56,ChargeZone,Active,2024-01-02
+1,Station_1,15.201505184098082,71.18565935726714,Vijayawada,North,67,ChargeZone,Active,2024-01-01
