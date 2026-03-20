@@ -13,12 +13,12 @@ import plotly.graph_objects as go
 # ============================================================
 # CREDENTIALS
 # ============================================================
-SNOWFLAKE_ACCOUNT   = "ACCOUT"
-SNOWFLAKE_USER      = "USER"
-SNOWFLAKE_PASSWORD  = "PASSWORD"
-SNOWFLAKE_WAREHOUSE = "WH"
-SNOWFLAKE_DATABASE  = "DB"
-SNOWFLAKE_SCHEMA    = "RAW"
+SNOWFLAKE_ACCOUNT   = st.secrets.get("SNOWFLAKE_ACCOUNT",   "SNYFGVD-AE23200")
+SNOWFLAKE_USER      = st.secrets.get("SNOWFLAKE_USER",      "SATYAPRAKASH")
+SNOWFLAKE_PASSWORD  = st.secrets.get("SNOWFLAKE_PASSWORD",  "RollsRoyce@22290")
+SNOWFLAKE_WAREHOUSE = st.secrets.get("SNOWFLAKE_WAREHOUSE", "CHARGEEASE_WH")
+SNOWFLAKE_DATABASE  = st.secrets.get("SNOWFLAKE_DATABASE",  "CHARGEEASE_DB")
+SNOWFLAKE_SCHEMA    = st.secrets.get("SNOWFLAKE_SCHEMA",    "RAW")
 
 # ============================================================
 # PAGE CONFIG
